@@ -1,0 +1,15 @@
+kafka:
+  topic: sensor_topic
+  bootstrap_servers: localhost:9092
+
+stream:
+  event_rate: 100
+  sensors: 1000
+
+paths:
+  delta_table: tables/delta
+  hudi_table: tables/hudi
+  iceberg_table: tables/iceberg
+
+benchmark:
+  duration_minutes: 10

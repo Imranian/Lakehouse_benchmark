@@ -1,0 +1,1 @@
+print("Running Hudi compaction job")
