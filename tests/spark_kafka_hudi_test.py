@@ -8,12 +8,8 @@ from pyspark.sql.types import DoubleType, LongType, StringType, StructType
 
 def build_spark_session():
     spark = (
-        SparkSession.builder.appName("KafkaDeltaTest")
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        .config(
-            "spark.sql.catalog.spark_catalog",
-            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
-        )
+        SparkSession.builder.appName("KafkaHudiTest")
+        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
@@ -58,39 +54,61 @@ def main():
     parser.add_argument("--topic", default="sensor_topic")
     parser.add_argument(
         "--output-path",
-        default="file:///home/imran/lakehouse_test/delta",
+        default="file:///home/imran/lakehouse_test/hudi",
     )
     parser.add_argument(
         "--checkpoint-path",
-        default="file:///home/imran/lakehouse_test/checkpoints/delta",
+        default="file:///home/imran/lakehouse_test/checkpoints/hudi",
     )
+    parser.add_argument("--table-name", default="sensor_hudi_test")
     parser.add_argument("--timeout", type=int, default=60)
     args = parser.parse_args()
 
     spark = build_spark_session()
     parsed_df = build_sensor_stream(spark, args.bootstrap, args.topic)
 
+    hudi_options = {
+        "hoodie.table.name": args.table_name,
+        "hoodie.datasource.write.table.type": "COPY_ON_WRITE",
+        "hoodie.datasource.write.operation": "upsert",
+        "hoodie.datasource.write.recordkey.field": "sensor_id",
+        "hoodie.datasource.write.precombine.field": "event_ts",
+        "hoodie.datasource.write.keygenerator.class": "org.apache.hudi.keygen.NonpartitionedKeyGenerator",
+    }
+
+    def write_hudi_batch(batch_df, batch_id):
+        if batch_df.rdd.isEmpty():
+            return
+
+        (
+            batch_df.write.format("hudi")
+            .options(**hudi_options)
+            .mode("append")
+            .save(args.output_path)
+        )
+        print(f"Wrote Hudi batch {batch_id}")
+
     query = (
-        parsed_df.writeStream.format("delta")
+        parsed_df.writeStream.foreachBatch(write_hudi_batch)
         .outputMode("append")
         .option("checkpointLocation", args.checkpoint_path)
-        .start(args.output_path)
+        .start()
     )
 
     query.awaitTermination(args.timeout)
     if query.isActive:
         query.stop()
 
-    result_df = spark.read.format("delta").load(args.output_path)
+    result_df = spark.read.format("hudi").load(args.output_path)
     row_count = result_df.count()
 
-    print(f"Delta rows written: {row_count}")
+    print(f"Hudi rows written: {row_count}")
     result_df.orderBy(col("event_ts").desc()).show(10, truncate=False)
 
     spark.stop()
 
     if row_count == 0:
-        print("No rows were written to Delta. Make sure the generator is running.")
+        print("No rows were written to Hudi. Make sure the generator is running.")
         sys.exit(1)
 
 

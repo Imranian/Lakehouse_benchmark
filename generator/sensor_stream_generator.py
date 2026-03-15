@@ -14,13 +14,16 @@ def create_producer(bootstrap_servers):
 
 def generate_sensor_event(sensor_count):
     sensor_id = f"sensor_{random.randint(1, sensor_count)}"
+    produced_at_ms = int(time.time() * 1000)
 
     return {
+        "event_id": f"{sensor_id}_{produced_at_ms}_{random.randint(1000, 9999)}",
         "sensor_id": sensor_id,
         "temperature": round(random.uniform(20, 90), 2),
         "pressure": round(random.uniform(90, 120), 2),
         "vibration": round(random.uniform(0, 1.5), 3),
-        "timestamp": int(time.time())
+        "timestamp": int(time.time()),
+        "produced_at_ms": produced_at_ms,
     }
 
 

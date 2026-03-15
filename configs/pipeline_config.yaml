@@ -7,9 +7,28 @@ stream:
   sensors: 1000
 
 paths:
-  delta_table: tables/delta
-  hudi_table: tables/hudi
-  iceberg_table: tables/iceberg
+  delta_table: file:///home/imran/lakehouse_benchmark/data/lakehouse/delta
+  hudi_table: file:///home/imran/lakehouse_benchmark/data/lakehouse/hudi
+  iceberg_warehouse: file:///home/imran/lakehouse_benchmark/data/lakehouse/iceberg_warehouse
+  delta_checkpoint: file:///home/imran/lakehouse_benchmark/data/checkpoints/delta
+  hudi_checkpoint: file:///home/imran/lakehouse_benchmark/data/checkpoints/hudi
+  iceberg_checkpoint: file:///home/imran/lakehouse_benchmark/data/checkpoints/iceberg
+
+hudi:
+  table_name: sensor_hudi
+  table_type: COPY_ON_WRITE
+
+iceberg:
+  namespace: benchmark
+  table_name: sensor_iceberg
 
 benchmark:
-  duration_minutes: 10
+  duration_seconds: 120
+  query_runs: 3
+  small_file_threshold_mb: 16
+
+metrics:
+  output_dir: /home/imran/lakehouse_benchmark/metrics/results
+  delta_ingestion: /home/imran/lakehouse_benchmark/metrics/results/delta_ingestion.json
+  hudi_ingestion: /home/imran/lakehouse_benchmark/metrics/results/hudi_ingestion.json
+  iceberg_ingestion: /home/imran/lakehouse_benchmark/metrics/results/iceberg_ingestion.json
