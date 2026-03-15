@@ -2,11 +2,15 @@ from datetime import datetime
 from pathlib import Path
 
 from airflow import DAG
-from airflow.operators.bash import BashOperator
+from airflow.providers.standard.operators.bash import BashOperator
 
 
 ROOT_DIR = Path("/home/imran/lakehouse_benchmark")
 COMMON_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.4"
+
+
+def shell(command):
+    return f"set -e\ncd {ROOT_DIR}\n{command}\n"
 
 
 with DAG(
@@ -18,22 +22,20 @@ with DAG(
 ) as dag:
     start_kafka = BashOperator(
         task_id="start_kafka",
-        bash_command=f"cd {ROOT_DIR} && ./scripts/start_kafka.sh all-background",
+        bash_command=shell("./scripts/start_kafka.sh all-background"),
     )
 
     start_generator = BashOperator(
         task_id="start_generator",
-        bash_command=(
-            f"cd {ROOT_DIR} && "
+        bash_command=shell(
             "DURATION_SECONDS=150 EVENT_RATE=100 SENSOR_COUNT=1000 "
-            "./scripts/start_generator.sh"
+            "./scripts/start_generator.sh "
         ),
     )
 
     delta_stream = BashOperator(
         task_id="delta_stream",
-        bash_command=(
-            f"cd {ROOT_DIR} && "
+        bash_command=shell(
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0 "
             "spark/stream_delta.py"
         ),
@@ -41,8 +43,7 @@ with DAG(
 
     hudi_stream = BashOperator(
         task_id="hudi_stream",
-        bash_command=(
-            f"cd {ROOT_DIR} && "
+        bash_command=shell(
             f"spark-submit --packages {COMMON_PACKAGES},org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 "
             "spark/stream_hudi.py"
         ),
@@ -50,8 +51,7 @@ with DAG(
 
     iceberg_stream = BashOperator(
         task_id="iceberg_stream",
-        bash_command=(
-            f"cd {ROOT_DIR} && "
+        bash_command=shell(
             f"spark-submit --packages {COMMON_PACKAGES},org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "spark/stream_iceberg.py"
         ),
@@ -59,13 +59,12 @@ with DAG(
 
     collect_metrics = BashOperator(
         task_id="collect_metrics",
-        bash_command=f"cd {ROOT_DIR} && python3 metrics/metrics_collector.py",
+        bash_command=shell("python3 metrics/metrics_collector.py"),
     )
 
     query_benchmark = BashOperator(
         task_id="query_benchmark",
-        bash_command=(
-            f"cd {ROOT_DIR} && "
+        bash_command=shell(
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0,org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "queries/benchmark_queries.py"
         ),

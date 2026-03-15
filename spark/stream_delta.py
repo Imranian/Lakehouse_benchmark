@@ -1,7 +1,13 @@
 import argparse
+import sys
 import time
+from pathlib import Path
 
 from pyspark.sql import SparkSession
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from spark.stream_common import build_sensor_stream, load_config, write_json
 

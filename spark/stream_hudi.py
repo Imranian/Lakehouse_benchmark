@@ -1,7 +1,13 @@
 import argparse
+import sys
 import time
+from pathlib import Path
 
 from pyspark.sql import SparkSession
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from spark.stream_common import build_sensor_stream, load_config, write_json
 
@@ -63,6 +69,15 @@ def main():
     query.awaitTermination(timeout)
     if query.isActive:
         query.stop()
+
+    hudi_table_path = config["paths"]["hudi_table"].replace("file://", "", 1)
+    if not Path(hudi_table_path).exists():
+        spark.stop()
+        raise RuntimeError(
+            "Hudi table path was not created. This usually means no Kafka records were "
+            "written during the run. Check that Kafka is running and the generator is "
+            "producing events."
+        )
 
     duration_seconds = round(time.time() - start_time, 2)
     result_df = spark.read.format("hudi").load(config["paths"]["hudi_table"])

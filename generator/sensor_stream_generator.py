@@ -2,6 +2,13 @@ import json
 import random
 import time
 import argparse
+import sys
+
+import six
+
+sys.modules.setdefault("kafka.vendor.six", six)
+sys.modules.setdefault("kafka.vendor.six.moves", six.moves)
+
 from kafka import KafkaProducer
 
 
