@@ -4,12 +4,19 @@ import time
 from pathlib import Path
 
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from spark.stream_common import build_sensor_stream, load_config, write_json
+from spark.stream_common import (
+    build_sensor_stream,
+    get_configured_storage_path,
+    get_metrics_file_path,
+    load_config,
+    write_json,
+)
 
 
 def build_spark_session(warehouse_path):
@@ -36,7 +43,14 @@ def main():
 
     config = load_config(args.config)
     timeout = args.timeout or config["benchmark"]["duration_seconds"]
-    spark = build_spark_session(config["paths"]["iceberg_warehouse"])
+    iceberg_warehouse_path = get_configured_storage_path(config, "iceberg_warehouse")
+    iceberg_checkpoint_path = get_configured_storage_path(config, "iceberg_checkpoint")
+    spark = build_spark_session(iceberg_warehouse_path)
+    print(
+        f"[iceberg] Starting stream from topic={config['kafka']['topic']} "
+        f"to table=local.{config['iceberg']['namespace']}.{config['iceberg']['table_name']} "
+        f"for {timeout} seconds"
+    )
     parsed_df = build_sensor_stream(
         spark,
         config["kafka"]["bootstrap_servers"],
@@ -67,7 +81,7 @@ def main():
     query = (
         parsed_df.writeStream.format("iceberg")
         .outputMode("append")
-        .option("checkpointLocation", config["paths"]["iceberg_checkpoint"])
+        .option("checkpointLocation", iceberg_checkpoint_path)
         .toTable(full_table_name)
     )
 
@@ -101,9 +115,19 @@ def main():
         else 0,
     }
 
-    write_json(config["metrics"]["iceberg_ingestion"], metrics)
+    metrics_output_path = get_metrics_file_path(config, "iceberg_ingestion")
+    write_json(metrics_output_path, metrics)
+    print(f"[iceberg] Summary: {metrics}")
+    print(f"[iceberg] Metrics written to {metrics_output_path}")
+    result_df.orderBy(col("ingested_at_ms").desc()).select(
+        "event_id",
+        "sensor_id",
+        "temperature",
+        "produced_at_ms",
+        "ingested_at_ms",
+    ).show(5, truncate=False)
     spark.stop()
-    print(metrics)
+    print("[iceberg] Stream completed successfully")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from airflow import DAG
 from airflow.providers.standard.operators.bash import BashOperator
+from airflow.utils.trigger_rule import TriggerRule
 
 
 ROOT_DIR = Path("/home/imran/lakehouse_benchmark")
@@ -11,6 +12,9 @@ COMMON_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.4"
 
 def shell(command):
     return f"set -e\ncd {ROOT_DIR}\n{command}\n"
+
+
+RUN_LABEL = "run_{{ ts_nodash }}"
 
 
 with DAG(
@@ -22,12 +26,16 @@ with DAG(
 ) as dag:
     start_kafka = BashOperator(
         task_id="start_kafka",
-        bash_command=shell("./scripts/start_kafka.sh all-background"),
+        bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            "./scripts/start_kafka.sh all-background"
+        ),
     )
 
     start_generator = BashOperator(
         task_id="start_generator",
         bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
             "DURATION_SECONDS=150 EVENT_RATE=100 SENSOR_COUNT=1000 "
             "./scripts/start_generator.sh "
         ),
@@ -36,6 +44,7 @@ with DAG(
     delta_stream = BashOperator(
         task_id="delta_stream",
         bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0 "
             "spark/stream_delta.py"
         ),
@@ -44,6 +53,7 @@ with DAG(
     hudi_stream = BashOperator(
         task_id="hudi_stream",
         bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
             f"spark-submit --packages {COMMON_PACKAGES},org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 "
             "spark/stream_hudi.py"
         ),
@@ -52,6 +62,7 @@ with DAG(
     iceberg_stream = BashOperator(
         task_id="iceberg_stream",
         bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
             f"spark-submit --packages {COMMON_PACKAGES},org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "spark/stream_iceberg.py"
         ),
@@ -59,16 +70,26 @@ with DAG(
 
     collect_metrics = BashOperator(
         task_id="collect_metrics",
-        bash_command=shell("python3 metrics/metrics_collector.py"),
+        bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            "python3 metrics/metrics_collector.py"
+        ),
     )
 
     query_benchmark = BashOperator(
         task_id="query_benchmark",
         bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0,org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "queries/benchmark_queries.py"
         ),
     )
 
+    stop_services = BashOperator(
+        task_id="stop_services",
+        bash_command=shell("./scripts/stop_services.sh"),
+        trigger_rule=TriggerRule.ALL_DONE,
+    )
+
     start_kafka >> start_generator >> [delta_stream, hudi_stream, iceberg_stream]
-    [delta_stream, hudi_stream, iceberg_stream] >> collect_metrics >> query_benchmark
+    [delta_stream, hudi_stream, iceberg_stream] >> collect_metrics >> query_benchmark >> stop_services

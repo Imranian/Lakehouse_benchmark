@@ -4,12 +4,19 @@ import time
 from pathlib import Path
 
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from spark.stream_common import build_sensor_stream, load_config, write_json
+from spark.stream_common import (
+    build_sensor_stream,
+    get_configured_storage_path,
+    get_metrics_file_path,
+    load_config,
+    write_json,
+)
 
 
 def build_spark_session():
@@ -34,7 +41,13 @@ def main():
 
     config = load_config(args.config)
     timeout = args.timeout or config["benchmark"]["duration_seconds"]
+    delta_table_path = get_configured_storage_path(config, "delta_table")
+    delta_checkpoint_path = get_configured_storage_path(config, "delta_checkpoint")
     spark = build_spark_session()
+    print(
+        f"[delta] Starting stream from topic={config['kafka']['topic']} "
+        f"to path={delta_table_path} for {timeout} seconds"
+    )
     parsed_df = build_sensor_stream(
         spark,
         config["kafka"]["bootstrap_servers"],
@@ -45,11 +58,8 @@ def main():
     query = (
         parsed_df.writeStream.format("delta")
         .outputMode("append")
-        .option(
-            "checkpointLocation",
-            config["paths"]["delta_checkpoint"],
-        )
-        .start(config["paths"]["delta_table"])
+        .option("checkpointLocation", delta_checkpoint_path)
+        .start(delta_table_path)
     )
 
     query.awaitTermination(timeout)
@@ -57,7 +67,7 @@ def main():
         query.stop()
 
     duration_seconds = round(time.time() - start_time, 2)
-    result_df = spark.read.format("delta").load(config["paths"]["delta_table"])
+    result_df = spark.read.format("delta").load(delta_table_path)
     summary = (
         result_df.selectExpr(
             "COUNT(*) AS row_count",
@@ -69,7 +79,7 @@ def main():
 
     metrics = {
         "format": "delta",
-        "table_path": config["paths"]["delta_table"],
+        "table_path": delta_table_path,
         "duration_seconds": duration_seconds,
         "row_count": int(summary["row_count"]),
         "avg_ingestion_latency_ms": float(summary["avg_ingestion_latency_ms"] or 0),
@@ -82,9 +92,19 @@ def main():
         else 0,
     }
 
-    write_json(config["metrics"]["delta_ingestion"], metrics)
+    metrics_output_path = get_metrics_file_path(config, "delta_ingestion")
+    write_json(metrics_output_path, metrics)
+    print(f"[delta] Summary: {metrics}")
+    print(f"[delta] Metrics written to {metrics_output_path}")
+    result_df.orderBy(col("ingested_at_ms").desc()).select(
+        "event_id",
+        "sensor_id",
+        "temperature",
+        "produced_at_ms",
+        "ingested_at_ms",
+    ).show(5, truncate=False)
     spark.stop()
-    print(metrics)
+    print("[delta] Stream completed successfully")
 
 
 if __name__ == "__main__":

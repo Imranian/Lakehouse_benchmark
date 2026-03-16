@@ -1,7 +1,17 @@
 venv
 data
+metrics/results
 .airflow
 __pycache__
 *.pyc
 *.pyo
 *.pyd
+*.json
+*.csv
+*.log
+*.db
+*.sqlite
+*.parquet
+*.delta
+*.hudi
+*.iceberg  

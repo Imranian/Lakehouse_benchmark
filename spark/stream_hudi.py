@@ -4,12 +4,19 @@ import time
 from pathlib import Path
 
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from spark.stream_common import build_sensor_stream, load_config, write_json
+from spark.stream_common import (
+    build_sensor_stream,
+    get_configured_storage_path,
+    get_metrics_file_path,
+    load_config,
+    write_json,
+)
 
 
 def build_spark_session():
@@ -30,7 +37,13 @@ def main():
 
     config = load_config(args.config)
     timeout = args.timeout or config["benchmark"]["duration_seconds"]
+    hudi_table_path = get_configured_storage_path(config, "hudi_table")
+    hudi_checkpoint_path = get_configured_storage_path(config, "hudi_checkpoint")
     spark = build_spark_session()
+    print(
+        f"[hudi] Starting stream from topic={config['kafka']['topic']} "
+        f"to path={hudi_table_path} for {timeout} seconds"
+    )
     parsed_df = build_sensor_stream(
         spark,
         config["kafka"]["bootstrap_servers"],
@@ -54,7 +67,7 @@ def main():
             batch_df.write.format("hudi")
             .options(**hudi_options)
             .mode("append")
-            .save(config["paths"]["hudi_table"])
+            .save(hudi_table_path)
         )
         print(f"Wrote Hudi batch {batch_id}")
 
@@ -62,7 +75,7 @@ def main():
     query = (
         parsed_df.writeStream.foreachBatch(write_hudi_batch)
         .outputMode("append")
-        .option("checkpointLocation", config["paths"]["hudi_checkpoint"])
+        .option("checkpointLocation", hudi_checkpoint_path)
         .start()
     )
 
@@ -70,8 +83,8 @@ def main():
     if query.isActive:
         query.stop()
 
-    hudi_table_path = config["paths"]["hudi_table"].replace("file://", "", 1)
-    if not Path(hudi_table_path).exists():
+    local_hudi_table_path = hudi_table_path.replace("file://", "", 1)
+    if not Path(local_hudi_table_path).exists():
         spark.stop()
         raise RuntimeError(
             "Hudi table path was not created. This usually means no Kafka records were "
@@ -80,7 +93,7 @@ def main():
         )
 
     duration_seconds = round(time.time() - start_time, 2)
-    result_df = spark.read.format("hudi").load(config["paths"]["hudi_table"])
+    result_df = spark.read.format("hudi").load(hudi_table_path)
     summary = (
         result_df.selectExpr(
             "COUNT(*) AS row_count",
@@ -92,7 +105,7 @@ def main():
 
     metrics = {
         "format": "hudi",
-        "table_path": config["paths"]["hudi_table"],
+        "table_path": hudi_table_path,
         "duration_seconds": duration_seconds,
         "row_count": int(summary["row_count"]),
         "avg_ingestion_latency_ms": float(summary["avg_ingestion_latency_ms"] or 0),
@@ -105,9 +118,19 @@ def main():
         else 0,
     }
 
-    write_json(config["metrics"]["hudi_ingestion"], metrics)
+    metrics_output_path = get_metrics_file_path(config, "hudi_ingestion")
+    write_json(metrics_output_path, metrics)
+    print(f"[hudi] Summary: {metrics}")
+    print(f"[hudi] Metrics written to {metrics_output_path}")
+    result_df.orderBy(col("ingested_at_ms").desc()).select(
+        "event_id",
+        "sensor_id",
+        "temperature",
+        "produced_at_ms",
+        "ingested_at_ms",
+    ).show(5, truncate=False)
     spark.stop()
-    print(metrics)
+    print("[hudi] Stream completed successfully")
 
 
 if __name__ == "__main__":

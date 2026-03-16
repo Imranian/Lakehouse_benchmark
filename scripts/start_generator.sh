@@ -8,6 +8,8 @@ BOOTSTRAP_SERVER="${BOOTSTRAP_SERVER:-localhost:9092}"
 EVENT_RATE="${EVENT_RATE:-100}"
 SENSOR_COUNT="${SENSOR_COUNT:-1000}"
 DURATION_SECONDS="${DURATION_SECONDS:-120}"
+LOG_DIR="${LOG_DIR:-/tmp/lakehouse_benchmark_logs}"
+GENERATOR_PID_FILE="$LOG_DIR/generator.pid"
 
 if [[ -n "${PYTHON_BIN:-}" ]]; then
   PROJECT_PYTHON="$PYTHON_BIN"
@@ -19,7 +21,12 @@ else
   PROJECT_PYTHON="python3"
 fi
 
-mkdir -p /tmp/lakehouse_benchmark_logs
+mkdir -p "$LOG_DIR"
+
+if [[ -f "$GENERATOR_PID_FILE" ]] && kill -0 "$(cat "$GENERATOR_PID_FILE")" 2>/dev/null; then
+  echo "Sensor generator already running with PID $(cat "$GENERATOR_PID_FILE")"
+  exit 0
+fi
 
 nohup "$PROJECT_PYTHON" "$ROOT_DIR/generator/sensor_stream_generator.py" \
   --topic "$TOPIC_NAME" \
@@ -27,6 +34,8 @@ nohup "$PROJECT_PYTHON" "$ROOT_DIR/generator/sensor_stream_generator.py" \
   --rate "$EVENT_RATE" \
   --sensors "$SENSOR_COUNT" \
   --duration "$DURATION_SECONDS" \
-  >/tmp/lakehouse_benchmark_logs/generator.log 2>&1 &
+  >"$LOG_DIR/generator.log" 2>&1 &
 
-echo "Sensor generator started in background. Logs: /tmp/lakehouse_benchmark_logs/generator.log"
+echo $! >"$GENERATOR_PID_FILE"
+
+echo "Sensor generator started with PID $(cat "$GENERATOR_PID_FILE"). Logs: $LOG_DIR/generator.log"

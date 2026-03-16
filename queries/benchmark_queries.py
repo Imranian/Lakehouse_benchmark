@@ -1,8 +1,16 @@
 import csv
+import sys
 import time
+from pathlib import Path
 
 import yaml
 from pyspark.sql import SparkSession
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from spark.stream_common import get_configured_storage_path, get_metrics_dir
 
 
 def load_config(config_path="configs/pipeline_config.yaml"):
@@ -41,21 +49,35 @@ def time_query(spark, sql_text):
 
 def main():
     config = load_config()
-    spark = build_spark_session(config["paths"]["iceberg_warehouse"])
+    iceberg_warehouse_path = get_configured_storage_path(config, "iceberg_warehouse")
+    delta_table_path = get_configured_storage_path(config, "delta_table")
+    hudi_table_path = get_configured_storage_path(config, "hudi_table")
+    spark = build_spark_session(iceberg_warehouse_path)
     query_runs = config["benchmark"]["query_runs"]
     iceberg_table = (
         f"local.{config['iceberg']['namespace']}.{config['iceberg']['table_name']}"
+    )
+    local_hudi_table_path = hudi_table_path.replace("file://", "", 1)
+
+    if not Path(local_hudi_table_path).exists():
+        spark.stop()
+        raise RuntimeError(
+            "Hudi table path does not exist, so query benchmarking cannot run for Hudi."
+        )
+
+    spark.read.format("hudi").load(hudi_table_path).createOrReplaceTempView(
+        "hudi_sensor_table"
     )
 
     sql_by_format = {
         "delta": f"""
             SELECT sensor_id, AVG(temperature) AS avg_temperature
-            FROM delta.`{config["paths"]["delta_table"]}`
+            FROM delta.`{delta_table_path}`
             GROUP BY sensor_id
         """,
         "hudi": f"""
             SELECT sensor_id, AVG(temperature) AS avg_temperature
-            FROM hudi.`{config["paths"]["hudi_table"]}`
+            FROM hudi_sensor_table
             GROUP BY sensor_id
         """,
         "iceberg": f"""
@@ -65,7 +87,8 @@ def main():
         """,
     }
 
-    output_path = f"{config['metrics']['output_dir']}/query_benchmark_results.csv"
+    output_path = get_metrics_dir(config) / "query_benchmark_results.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(["format", "run_number", "query_latency_seconds"])

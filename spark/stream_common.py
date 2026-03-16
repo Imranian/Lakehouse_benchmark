@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import yaml
 from pyspark.sql.functions import col, current_timestamp, from_json
@@ -67,3 +69,43 @@ def write_json(output_path, payload):
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "w", encoding="utf-8") as file_handle:
         json.dump(payload, file_handle, indent=2)
+
+
+def get_run_label():
+    return os.environ.get("BENCHMARK_RUN_LABEL", "").strip()
+
+
+def get_metrics_dir(config):
+    base_dir = Path(config["metrics"]["output_dir"])
+    run_label = get_run_label()
+    if run_label:
+        return base_dir / run_label
+    return base_dir
+
+
+def get_metrics_file_path(config, metric_key):
+    metrics_dir = get_metrics_dir(config)
+    configured_path = Path(config["metrics"][metric_key])
+    return str(metrics_dir / configured_path.name)
+
+
+def _insert_run_label_into_path_string(path_string, run_label):
+    path_obj = Path(path_string)
+    return str(path_obj.parent / run_label / path_obj.name)
+
+
+def get_run_storage_path(path_or_uri):
+    run_label = get_run_label()
+    if not run_label:
+        return path_or_uri
+
+    if path_or_uri.startswith("file://"):
+        parsed = urlparse(path_or_uri)
+        new_path = _insert_run_label_into_path_string(parsed.path, run_label)
+        return urlunparse(parsed._replace(path=new_path))
+
+    return _insert_run_label_into_path_string(path_or_uri, run_label)
+
+
+def get_configured_storage_path(config, config_key):
+    return get_run_storage_path(config["paths"][config_key])

@@ -1,9 +1,20 @@
 import csv
 import json
 import os
+import sys
 from pathlib import Path
 
 import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from spark.stream_common import (
+    get_configured_storage_path,
+    get_metrics_dir,
+    get_metrics_file_path,
+)
 
 
 def load_config(config_path="configs/pipeline_config.yaml"):
@@ -46,25 +57,28 @@ def collect_file_metrics(base_path, small_file_threshold_bytes):
 
 def main():
     config = load_config()
-    metrics_dir = Path(config["metrics"]["output_dir"])
+    metrics_dir = get_metrics_dir(config)
     metrics_dir.mkdir(parents=True, exist_ok=True)
     threshold_bytes = config["benchmark"]["small_file_threshold_mb"] * 1024 * 1024
 
     ingestion_metrics = {
-        "delta": load_json(config["metrics"]["delta_ingestion"]),
-        "hudi": load_json(config["metrics"]["hudi_ingestion"]),
-        "iceberg": load_json(config["metrics"]["iceberg_ingestion"]),
+        "delta": load_json(get_metrics_file_path(config, "delta_ingestion")),
+        "hudi": load_json(get_metrics_file_path(config, "hudi_ingestion")),
+        "iceberg": load_json(get_metrics_file_path(config, "iceberg_ingestion")),
     }
 
     storage_metrics = {
         "delta": collect_file_metrics(
-            uri_to_path(config["paths"]["delta_table"]), threshold_bytes
+            uri_to_path(get_configured_storage_path(config, "delta_table")),
+            threshold_bytes,
         ),
         "hudi": collect_file_metrics(
-            uri_to_path(config["paths"]["hudi_table"]), threshold_bytes
+            uri_to_path(get_configured_storage_path(config, "hudi_table")),
+            threshold_bytes,
         ),
         "iceberg": collect_file_metrics(
-            uri_to_path(config["paths"]["iceberg_warehouse"]), threshold_bytes
+            uri_to_path(get_configured_storage_path(config, "iceberg_warehouse")),
+            threshold_bytes,
         ),
     }
 
