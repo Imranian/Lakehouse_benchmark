@@ -120,12 +120,30 @@ with DAG(
         ),
     )
 
+    prediction_benchmark_before = BashOperator(
+        task_id="prediction_benchmark_before",
+        bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0,org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
+            "ml/prediction_benchmark.py --mode before"
+        ),
+    )
+
     query_benchmark_after = BashOperator(
         task_id="query_benchmark_after",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0,org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "queries/benchmark_queries.py --mode after"
+        ),
+    )
+
+    prediction_benchmark_after = BashOperator(
+        task_id="prediction_benchmark_after",
+        bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0,org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
+            "ml/prediction_benchmark.py --mode after"
         ),
     )
 
@@ -138,6 +156,8 @@ with DAG(
     start_kafka >> start_generator >> [delta_stream, hudi_stream, iceberg_stream]
     [delta_stream, hudi_stream, iceberg_stream] >> collect_metrics
     collect_metrics >> query_benchmark_before
-    query_benchmark_before >> [delta_compaction, hudi_compaction, iceberg_compaction]
+    query_benchmark_before >> prediction_benchmark_before
+    prediction_benchmark_before >> [delta_compaction, hudi_compaction, iceberg_compaction]
     [delta_compaction, hudi_compaction, iceberg_compaction] >> collect_compaction_metrics
-    collect_compaction_metrics >> query_benchmark_after >> stop_services
+    collect_compaction_metrics >> query_benchmark_after
+    query_benchmark_after >> prediction_benchmark_after >> stop_services
