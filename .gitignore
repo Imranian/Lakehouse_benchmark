@@ -1,6 +1,7 @@
 venv
 data
 metrics/results
+analysis/paper_figures
 .airflow
 __pycache__
 *.pyc

@@ -8,6 +8,9 @@ BOOTSTRAP_SERVER="${BOOTSTRAP_SERVER:-localhost:9092}"
 EVENT_RATE="${EVENT_RATE:-100}"
 SENSOR_COUNT="${SENSOR_COUNT:-1000}"
 DURATION_SECONDS="${DURATION_SECONDS:-120}"
+GENERATOR_MODE="${GENERATOR_MODE:-constant}"
+PHASE_RATES="${PHASE_RATES:-}"
+PHASE_DURATIONS="${PHASE_DURATIONS:-}"
 LOG_DIR="${LOG_DIR:-/tmp/lakehouse_benchmark_logs}"
 GENERATOR_PID_FILE="$LOG_DIR/generator.pid"
 
@@ -28,12 +31,27 @@ if [[ -f "$GENERATOR_PID_FILE" ]] && kill -0 "$(cat "$GENERATOR_PID_FILE")" 2>/d
   exit 0
 fi
 
+GENERATOR_ARGS=(
+  --topic "$TOPIC_NAME"
+  --bootstrap "$BOOTSTRAP_SERVER"
+  --sensors "$SENSOR_COUNT"
+  --mode "$GENERATOR_MODE"
+)
+
+if [[ "$GENERATOR_MODE" == "burst" ]]; then
+  GENERATOR_ARGS+=(
+    --phase-rates "$PHASE_RATES"
+    --phase-durations "$PHASE_DURATIONS"
+  )
+else
+  GENERATOR_ARGS+=(
+    --rate "$EVENT_RATE"
+    --duration "$DURATION_SECONDS"
+  )
+fi
+
 nohup "$PROJECT_PYTHON" "$ROOT_DIR/generator/sensor_stream_generator.py" \
-  --topic "$TOPIC_NAME" \
-  --bootstrap "$BOOTSTRAP_SERVER" \
-  --rate "$EVENT_RATE" \
-  --sensors "$SENSOR_COUNT" \
-  --duration "$DURATION_SECONDS" \
+  "${GENERATOR_ARGS[@]}" \
   >"$LOG_DIR/generator.log" 2>&1 &
 
 echo $! >"$GENERATOR_PID_FILE"

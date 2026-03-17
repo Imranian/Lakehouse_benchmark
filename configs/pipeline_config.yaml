@@ -6,6 +6,34 @@ stream:
   event_rate: 100
   sensors: 1000
 
+workloads:
+  low:
+    mode: constant
+    event_rate: 100
+    duration_seconds: 150
+    sensors: 1000
+  medium:
+    mode: constant
+    event_rate: 1000
+    duration_seconds: 150
+    sensors: 1000
+  high:
+    mode: constant
+    event_rate: 5000
+    duration_seconds: 150
+    sensors: 1000
+  burst:
+    mode: burst
+    sensors: 1000
+    phase_rates:
+      - 100
+      - 2000
+      - 100
+    phase_durations:
+      - 45
+      - 60
+      - 45
+
 paths:
   delta_table: file:///home/imran/lakehouse_benchmark/data/lakehouse/delta
   hudi_table: file:///home/imran/lakehouse_benchmark/data/lakehouse/hudi

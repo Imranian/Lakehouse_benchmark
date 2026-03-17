@@ -1,20 +1,61 @@
 from datetime import datetime
+import json
 from pathlib import Path
 
+import yaml
 from airflow import DAG
+from airflow.models import Variable
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.task.trigger_rule import TriggerRule
 
 
 ROOT_DIR = Path("/home/imran/lakehouse_benchmark")
 COMMON_PACKAGES = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.4"
+PIPELINE_CONFIG = yaml.safe_load((ROOT_DIR / "configs/pipeline_config.yaml").read_text(encoding="utf-8"))
+WORKLOADS = Variable.get(
+    "benchmark_workloads",
+    default_var=json.dumps(PIPELINE_CONFIG["workloads"]),
+    deserialize_json=True,
+)
+DEFAULT_WORKLOAD_PROFILE = Variable.get(
+    "default_workload_profile",
+    default_var="low",
+)
 
 
 def shell(command):
     return f"set -e\ncd {ROOT_DIR}\n{command}\n"
 
 
-RUN_LABEL = "run_{{ ts_nodash }}"
+WORKLOAD_PROFILE = '{{ dag_run.conf.get("workload_profile", "' + DEFAULT_WORKLOAD_PROFILE + '") }}'
+RUN_LABEL = "run_{{ dag_run.conf.get('workload_profile', '" + DEFAULT_WORKLOAD_PROFILE + "') }}_{{ ts_nodash }}"
+
+
+def workload_exports():
+    lines = [
+        f'export WORKLOAD_PROFILE={WORKLOAD_PROFILE}',
+        'case "$WORKLOAD_PROFILE" in',
+    ]
+    for profile_name, profile_config in WORKLOADS.items():
+        lines.append(f"  {profile_name})")
+        lines.append(f"    export SENSOR_COUNT={profile_config['sensors']}")
+        lines.append(f"    export GENERATOR_MODE={profile_config['mode']}")
+        if profile_config["mode"] == "burst":
+            phase_rates = ",".join(str(rate) for rate in profile_config["phase_rates"])
+            phase_durations = ",".join(
+                str(duration) for duration in profile_config["phase_durations"]
+            )
+            total_duration = sum(profile_config["phase_durations"])
+            lines.append(f"    export PHASE_RATES={phase_rates}")
+            lines.append(f"    export PHASE_DURATIONS={phase_durations}")
+            lines.append(f"    export DURATION_SECONDS={total_duration}")
+        else:
+            lines.append(f"    export EVENT_RATE={profile_config['event_rate']}")
+            lines.append(f"    export DURATION_SECONDS={profile_config['duration_seconds']}")
+        lines.append("    ;;")
+    lines.append('  *) echo "Unsupported workload profile: $WORKLOAD_PROFILE"; exit 1 ;;')
+    lines.append("esac")
+    return "\n".join(lines)
 
 
 with DAG(
@@ -28,6 +69,7 @@ with DAG(
         task_id="start_kafka",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             "./scripts/start_kafka.sh all-background"
         ),
     )
@@ -36,7 +78,8 @@ with DAG(
         task_id="start_generator",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
-            "DURATION_SECONDS=150 EVENT_RATE=100 SENSOR_COUNT=1000 "
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
+            f"{workload_exports()}\n"
             "./scripts/start_generator.sh "
         ),
     )
@@ -45,6 +88,7 @@ with DAG(
         task_id="delta_stream",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0 "
             "spark/stream_delta.py"
         ),
@@ -54,6 +98,7 @@ with DAG(
         task_id="hudi_stream",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 "
             "spark/stream_hudi.py"
         ),
@@ -63,6 +108,7 @@ with DAG(
         task_id="iceberg_stream",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "spark/stream_iceberg.py"
         ),
@@ -72,6 +118,7 @@ with DAG(
         task_id="collect_metrics",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             "python3 metrics/metrics_collector.py"
         ),
     )
@@ -80,6 +127,7 @@ with DAG(
         task_id="delta_compaction",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0 "
             "compaction/delta_compact.py"
         ),
@@ -89,6 +137,7 @@ with DAG(
         task_id="hudi_compaction",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0 "
             "compaction/hudi_compact.py"
         ),
@@ -98,6 +147,7 @@ with DAG(
         task_id="iceberg_compaction",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "compaction/iceberg_compact.py"
         ),
@@ -107,6 +157,7 @@ with DAG(
         task_id="collect_compaction_metrics",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             "python3 metrics/compaction_metrics_collector.py"
         ),
     )
@@ -115,6 +166,7 @@ with DAG(
         task_id="query_benchmark_before",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0,org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "queries/benchmark_queries.py --mode before"
         ),
@@ -124,6 +176,7 @@ with DAG(
         task_id="prediction_benchmark_before",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0,org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "ml/prediction_benchmark.py --mode before"
         ),
@@ -133,6 +186,7 @@ with DAG(
         task_id="query_benchmark_after",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0,org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "queries/benchmark_queries.py --mode after"
         ),
@@ -142,8 +196,24 @@ with DAG(
         task_id="prediction_benchmark_after",
         bash_command=shell(
             f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
             f"spark-submit --packages {COMMON_PACKAGES},io.delta:delta-spark_2.12:3.2.0,org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0,org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.4.2 "
             "ml/prediction_benchmark.py --mode after"
+        ),
+    )
+
+    send_results_email = BashOperator(
+        task_id="send_results_email",
+        bash_command=shell(
+            f"export BENCHMARK_RUN_LABEL={RUN_LABEL}\n"
+            f"export BENCHMARK_WORKLOAD_PROFILE={WORKLOAD_PROFILE}\n"
+            "export SMTP_HOST='{{ var.value.get(\"smtp_host\", \"\") }}'\n"
+            "export SMTP_PORT='{{ var.value.get(\"smtp_port\", \"587\") }}'\n"
+            "export SMTP_USERNAME='{{ var.value.get(\"smtp_username\", \"\") }}'\n"
+            "export SMTP_PASSWORD='{{ var.value.get(\"smtp_password\", \"\") }}'\n"
+            "export SMTP_FROM='{{ var.value.get(\"smtp_from\", \"\") }}'\n"
+            "export SMTP_TO='{{ var.value.get(\"smtp_to\", \"\") }}'\n"
+            "python3 notifications/send_results_email.py"
         ),
     )
 
@@ -160,4 +230,4 @@ with DAG(
     prediction_benchmark_before >> [delta_compaction, hudi_compaction, iceberg_compaction]
     [delta_compaction, hudi_compaction, iceberg_compaction] >> collect_compaction_metrics
     collect_compaction_metrics >> query_benchmark_after
-    query_benchmark_after >> prediction_benchmark_after >> stop_services
+    query_benchmark_after >> prediction_benchmark_after >> send_results_email >> stop_services

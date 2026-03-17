@@ -23,6 +23,7 @@ def build_spark_session():
     spark = (
         SparkSession.builder.appName("HudiStreaming")
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+        .config("spark.sql.shuffle.partitions", "8")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
@@ -69,7 +70,8 @@ def main():
             return
 
         (
-            batch_df.write.format("hudi")
+            batch_df.coalesce(8)
+            .write.format("hudi")
             .options(**hudi_options)
             .mode("append")
             .save(hudi_table_path)
@@ -88,6 +90,11 @@ def main():
     if query.isActive:
         query.stop()
 
+    stream_exception = query.exception()
+    if stream_exception is not None:
+        spark.stop()
+        raise RuntimeError(f"Hudi streaming query failed: {stream_exception}")
+
     local_hudi_table_path = hudi_table_path.replace("file://", "", 1)
     if not Path(local_hudi_table_path).exists():
         spark.stop()
@@ -99,6 +106,39 @@ def main():
 
     duration_seconds = round(time.time() - start_time, 2)
     result_df = spark.read.format("hudi").load(hudi_table_path)
+    expected_columns = {
+        "event_id",
+        "sensor_id",
+        "temperature",
+        "pressure",
+        "vibration",
+        "produced_at_ms",
+        "ingested_at_ms",
+    }
+    available_columns = set(result_df.columns)
+    if not expected_columns.issubset(available_columns):
+        metrics_output_path = get_metrics_file_path(config, "hudi_ingestion")
+        metrics = {
+            "format": "hudi",
+            "table_path": hudi_table_path,
+            "duration_seconds": duration_seconds,
+            "row_count": 0,
+            "avg_ingestion_latency_ms": 0,
+            "max_ingestion_latency_ms": 0,
+            "p95_ingestion_latency_ms": 0,
+            "write_throughput_rows_per_sec": 0,
+            "status": "empty_relation",
+            "available_columns": result_df.columns,
+        }
+        write_json(metrics_output_path, metrics)
+        print(f"[hudi] Summary: {metrics}")
+        print(
+            "[hudi] No committed Hudi data files were readable after the run. "
+            "The table path exists, but only metadata was found."
+        )
+        spark.stop()
+        return
+
     summary = (
         result_df.selectExpr(
             "COUNT(*) AS row_count",
