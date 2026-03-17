@@ -26,6 +26,11 @@ def build_spark_session():
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
+    log4j = spark._jvm.org.apache.log4j
+    log4j.LogManager.getLogger("org.apache.spark.sql.kafka010.KafkaDataConsumer").setLevel(
+        log4j.Level.ERROR
+    )
+    log4j.LogManager.getLogger("org.apache.hudi").setLevel(log4j.Level.WARN)
     return spark
 
 
@@ -53,7 +58,7 @@ def main():
     hudi_options = {
         "hoodie.table.name": config["hudi"]["table_name"],
         "hoodie.datasource.write.table.type": config["hudi"]["table_type"],
-        "hoodie.datasource.write.operation": "upsert",
+        "hoodie.datasource.write.operation": "insert",
         "hoodie.datasource.write.recordkey.field": "event_id",
         "hoodie.datasource.write.precombine.field": "produced_at_ms",
         "hoodie.datasource.write.keygenerator.class": "org.apache.hudi.keygen.NonpartitionedKeyGenerator",

@@ -27,8 +27,14 @@ benchmark:
   query_runs: 3
   small_file_threshold_mb: 16
 
+compaction:
+  target_file_count: 4
+
 metrics:
   output_dir: /home/imran/lakehouse_benchmark/metrics/results
   delta_ingestion: /home/imran/lakehouse_benchmark/metrics/results/delta_ingestion.json
   hudi_ingestion: /home/imran/lakehouse_benchmark/metrics/results/hudi_ingestion.json
   iceberg_ingestion: /home/imran/lakehouse_benchmark/metrics/results/iceberg_ingestion.json
+  delta_compaction: /home/imran/lakehouse_benchmark/metrics/results/delta_compaction.json
+  hudi_compaction: /home/imran/lakehouse_benchmark/metrics/results/hudi_compaction.json
+  iceberg_compaction: /home/imran/lakehouse_benchmark/metrics/results/iceberg_compaction.json

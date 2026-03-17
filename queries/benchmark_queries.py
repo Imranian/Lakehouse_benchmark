@@ -1,4 +1,5 @@
 import csv
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -10,7 +11,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from spark.stream_common import get_configured_storage_path, get_metrics_dir
+from spark.stream_common import (
+    get_compacted_storage_path,
+    get_configured_storage_path,
+    get_metrics_dir,
+)
 
 
 def load_config(config_path="configs/pipeline_config.yaml"):
@@ -48,10 +53,26 @@ def time_query(spark, sql_text):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["before", "after"], default="after")
+    args = parser.parse_args()
+
     config = load_config()
-    iceberg_warehouse_path = get_configured_storage_path(config, "iceberg_warehouse")
-    delta_table_path = get_configured_storage_path(config, "delta_table")
-    hudi_table_path = get_configured_storage_path(config, "hudi_table")
+    original_iceberg_warehouse_path = get_configured_storage_path(config, "iceberg_warehouse")
+    original_delta_table_path = get_configured_storage_path(config, "delta_table")
+    original_hudi_table_path = get_configured_storage_path(config, "hudi_table")
+
+    if args.mode == "after":
+        iceberg_warehouse_path = get_compacted_storage_path(original_iceberg_warehouse_path)
+        delta_table_path = get_compacted_storage_path(original_delta_table_path)
+        hudi_table_path = get_compacted_storage_path(original_hudi_table_path)
+        output_name = "query_benchmark_after_compaction.csv"
+    else:
+        iceberg_warehouse_path = original_iceberg_warehouse_path
+        delta_table_path = original_delta_table_path
+        hudi_table_path = original_hudi_table_path
+        output_name = "query_benchmark_before_compaction.csv"
+
     spark = build_spark_session(iceberg_warehouse_path)
     query_runs = config["benchmark"]["query_runs"]
     iceberg_table = (
@@ -62,7 +83,7 @@ def main():
     if not Path(local_hudi_table_path).exists():
         spark.stop()
         raise RuntimeError(
-            "Hudi table path does not exist, so query benchmarking cannot run for Hudi."
+            f"Hudi table path does not exist, so {args.mode}-compaction query benchmarking cannot run."
         )
 
     spark.read.format("hudi").load(hudi_table_path).createOrReplaceTempView(
@@ -87,7 +108,7 @@ def main():
         """,
     }
 
-    output_path = get_metrics_dir(config) / "query_benchmark_results.csv"
+    output_path = get_metrics_dir(config) / output_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)

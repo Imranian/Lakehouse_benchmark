@@ -109,3 +109,27 @@ def get_run_storage_path(path_or_uri):
 
 def get_configured_storage_path(config, config_key):
     return get_run_storage_path(config["paths"][config_key])
+
+
+def get_compacted_storage_path(path_or_uri):
+    if path_or_uri.startswith("file://"):
+        parsed = urlparse(path_or_uri)
+        compacted_path = f"{parsed.path}_compacted"
+        return urlunparse(parsed._replace(path=compacted_path))
+    return f"{path_or_uri}_compacted"
+
+
+def count_parquet_files(base_path):
+    file_count = 0
+    total_bytes = 0
+    local_path = uri_to_path(base_path)
+
+    if not Path(local_path).exists():
+        return {"data_file_count": 0, "total_size_bytes": 0}
+
+    for file_path in Path(local_path).rglob("*.parquet"):
+        if file_path.is_file():
+            file_count += 1
+            total_bytes += file_path.stat().st_size
+
+    return {"data_file_count": file_count, "total_size_bytes": total_bytes}
