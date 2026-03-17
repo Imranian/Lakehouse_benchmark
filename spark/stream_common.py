@@ -26,14 +26,17 @@ def sensor_schema():
     )
 
 
-def build_sensor_stream(spark, bootstrap_servers, topic):
-    kafka_df = (
+def build_sensor_stream(spark, bootstrap_servers, topic, max_offsets_per_trigger=None):
+    reader = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", bootstrap_servers)
         .option("subscribe", topic)
         .option("startingOffsets", "latest")
-        .load()
     )
+    if max_offsets_per_trigger is not None:
+        reader = reader.option("maxOffsetsPerTrigger", str(max_offsets_per_trigger))
+
+    kafka_df = reader.load()
 
     parsed_df = (
         kafka_df.selectExpr("CAST(value AS STRING) AS json")

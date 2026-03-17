@@ -35,6 +35,42 @@ def build_spark_session():
     return spark
 
 
+def stop_query_after_batch_boundary(query, timeout_seconds, grace_seconds=45):
+    start = time.time()
+    last_batch_id = None
+
+    while query.isActive and (time.time() - start) < timeout_seconds:
+        if query.exception() is not None:
+            return
+        progress = query.lastProgress
+        if progress:
+            last_batch_id = progress.get("batchId")
+        time.sleep(2)
+
+    if not query.isActive or query.exception() is not None:
+        return
+
+    print(
+        f"[hudi] Timeout reached after {timeout_seconds} seconds. "
+        "Waiting for the current micro-batch to finish before stopping."
+    )
+    drain_deadline = time.time() + grace_seconds
+    while query.isActive and time.time() < drain_deadline:
+        if query.exception() is not None:
+            return
+        progress = query.lastProgress
+        current_batch_id = progress.get("batchId") if progress else None
+        is_trigger_active = query.status.get("isTriggerActive", False)
+        if current_batch_id is not None and current_batch_id != last_batch_id and not is_trigger_active:
+            break
+        if current_batch_id is not None:
+            last_batch_id = current_batch_id
+        time.sleep(2)
+
+    if query.isActive:
+        query.stop()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/pipeline_config.yaml")
@@ -54,6 +90,7 @@ def main():
         spark,
         config["kafka"]["bootstrap_servers"],
         config["kafka"]["topic"],
+        max_offsets_per_trigger=5000,
     )
 
     hudi_options = {
@@ -63,6 +100,8 @@ def main():
         "hoodie.datasource.write.recordkey.field": "event_id",
         "hoodie.datasource.write.precombine.field": "produced_at_ms",
         "hoodie.datasource.write.keygenerator.class": "org.apache.hudi.keygen.NonpartitionedKeyGenerator",
+        "hoodie.metadata.enable": "false",
+        "hoodie.embed.timeline.server": "false",
     }
 
     def write_hudi_batch(batch_df, batch_id):
@@ -82,13 +121,12 @@ def main():
     query = (
         parsed_df.writeStream.foreachBatch(write_hudi_batch)
         .outputMode("append")
+        .trigger(processingTime="15 seconds")
         .option("checkpointLocation", hudi_checkpoint_path)
         .start()
     )
 
-    query.awaitTermination(timeout)
-    if query.isActive:
-        query.stop()
+    stop_query_after_batch_boundary(query, timeout_seconds=timeout)
 
     stream_exception = query.exception()
     if stream_exception is not None:

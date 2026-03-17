@@ -9,20 +9,29 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 RUN_IDS = [
-    "run_20260317T034809",
-    "run_20260317T042126",
-    "run_20260317T044105",
+    "run_low_20260317T091045",
+    "run_medium_20260317T100003",
+    "run_burst_20260317T093043",
 ]
 
 FORMAT_ORDER = ["delta", "hudi", "iceberg"]
+WORKLOAD_ORDER = ["low", "medium", "burst"]
 MODEL_ORDER = ["logistic_regression", "random_forest"]
 HATCHES = {"delta": "//", "hudi": "\\\\", "iceberg": "xx"}
+
+
+def extract_workload(run_id):
+    for workload in WORKLOAD_ORDER:
+        if run_id.startswith(f"run_{workload}_"):
+            return workload
+    return "unknown"
 
 
 def load_run_csv(base_dir, run_id, file_name):
     file_path = Path(base_dir) / run_id / file_name
     df = pd.read_csv(file_path)
     df["run_id"] = run_id
+    df["workload"] = extract_workload(run_id)
     return df
 
 
@@ -120,6 +129,42 @@ def plot_single_metric(summary, output_dir, metric_col, title, ylabel, file_stem
     save_figure(fig, output_dir, file_stem)
 
 
+def plot_workload_metric(summary, output_dir, title, ylabel, file_stem):
+    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    width = 0.22
+    positions = list(range(len(WORKLOAD_ORDER)))
+
+    for format_index, table_format in enumerate(FORMAT_ORDER):
+        offsets = [p + (format_index - 1) * width for p in positions]
+        values = []
+        errors = []
+        for workload in WORKLOAD_ORDER:
+            row = summary[
+                (summary["workload"] == workload) & (summary["format"] == table_format)
+            ].iloc[0]
+            values.append(row["mean"])
+            errors.append(row["std"])
+
+        bars = ax.bar(
+            offsets,
+            values,
+            width=width,
+            yerr=errors,
+            color="white",
+            edgecolor="black",
+            linewidth=1.0,
+            capsize=4,
+            label=table_format,
+        )
+        for bar in bars:
+            bar.set_hatch(HATCHES[table_format])
+
+    ax.set_xticks(positions, WORKLOAD_ORDER)
+    ax.legend(frameon=False, fontsize=8)
+    style_axes(ax, title, ylabel)
+    save_figure(fig, output_dir, file_stem)
+
+
 def plot_query_comparison(query_before, query_after, output_dir):
     before_summary = aggregate_mean_std(query_before, ["format"], "query_latency_seconds")
     after_summary = aggregate_mean_std(query_after, ["format"], "query_latency_seconds")
@@ -204,37 +249,71 @@ def plot_prediction_metric(prediction_df, metric_col, title, ylabel, file_stem, 
     save_figure(fig, output_dir, file_stem)
 
 
+def plot_prediction_metric_by_workload(
+    prediction_df,
+    metric_col,
+    model_name,
+    title,
+    ylabel,
+    file_stem,
+    output_dir,
+):
+    filtered = prediction_df[prediction_df["model"] == model_name]
+    summary = aggregate_mean_std(filtered, ["workload", "format"], metric_col)
+    plot_workload_metric(summary, output_dir, title, ylabel, file_stem)
+
+
+def add_row_capture_ratio(ingestion):
+    run_max = ingestion.groupby("run_id")["row_count"].transform("max")
+    enriched = ingestion.copy()
+    enriched["row_capture_ratio"] = enriched["row_count"] / run_max
+    return enriched
+
+
 def write_summary_tables(output_dir, ingestion, compaction, query_before, query_after, prediction_after):
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    ingestion = add_row_capture_ratio(ingestion)
     ingestion_summary = aggregate_mean_std(
-        ingestion, ["format"], "avg_ingestion_latency_ms"
+        ingestion, ["workload", "format"], "avg_ingestion_latency_ms"
     ).rename(columns={"mean": "avg_ingestion_latency_ms_mean", "std": "avg_ingestion_latency_ms_std"})
     throughput_summary = aggregate_mean_std(
-        ingestion, ["format"], "write_throughput_rows_per_sec"
+        ingestion, ["workload", "format"], "write_throughput_rows_per_sec"
     ).rename(columns={"mean": "throughput_mean", "std": "throughput_std"})
     file_summary = aggregate_mean_std(
-        ingestion, ["format"], "data_file_count"
+        ingestion, ["workload", "format"], "data_file_count"
     ).rename(columns={"mean": "file_count_mean", "std": "file_count_std"})
+    row_summary = aggregate_mean_std(
+        ingestion, ["workload", "format"], "row_count"
+    ).rename(columns={"mean": "row_count_mean", "std": "row_count_std"})
+    capture_summary = aggregate_mean_std(
+        ingestion, ["workload", "format"], "row_capture_ratio"
+    ).rename(columns={"mean": "row_capture_ratio_mean", "std": "row_capture_ratio_std"})
 
-    combined_ingestion = ingestion_summary.merge(throughput_summary, on="format").merge(file_summary, on="format")
-    combined_ingestion.to_csv(output_dir / "summary_ingestion.csv", index=False)
+    combined_ingestion = (
+        ingestion_summary
+        .merge(throughput_summary, on=["workload", "format"])
+        .merge(file_summary, on=["workload", "format"])
+        .merge(row_summary, on=["workload", "format"])
+        .merge(capture_summary, on=["workload", "format"])
+    )
+    combined_ingestion.to_csv(output_dir / "summary_ingestion_by_workload.csv", index=False)
 
-    compaction_summary = aggregate_mean_std(compaction, ["format"], "duration_seconds")
-    compaction_summary.to_csv(output_dir / "summary_compaction.csv", index=False)
+    compaction_summary = aggregate_mean_std(compaction, ["workload", "format"], "duration_seconds")
+    compaction_summary.to_csv(output_dir / "summary_compaction_by_workload.csv", index=False)
 
-    query_before_summary = aggregate_mean_std(query_before, ["format"], "query_latency_seconds")
-    query_after_summary = aggregate_mean_std(query_after, ["format"], "query_latency_seconds")
+    query_before_summary = aggregate_mean_std(query_before, ["workload", "format"], "query_latency_seconds")
+    query_after_summary = aggregate_mean_std(query_after, ["workload", "format"], "query_latency_seconds")
     query_before_summary["phase"] = "before"
     query_after_summary["phase"] = "after"
     pd.concat([query_before_summary, query_after_summary], ignore_index=True).to_csv(
-        output_dir / "summary_query.csv", index=False
+        output_dir / "summary_query_by_workload.csv", index=False
     )
 
     prediction_summary = aggregate_mean_std(
-        prediction_after, ["format", "model"], "accuracy"
+        prediction_after, ["workload", "format", "model"], "accuracy"
     ).rename(columns={"mean": "accuracy_mean", "std": "accuracy_std"})
-    prediction_summary.to_csv(output_dir / "summary_prediction.csv", index=False)
+    prediction_summary.to_csv(output_dir / "summary_prediction_by_workload.csv", index=False)
 
 
 def main():
@@ -284,42 +363,66 @@ def main():
         prediction_before,
         prediction_after,
     ) = load_all_results(results_dir, args.run_ids)
+    ingestion = add_row_capture_ratio(ingestion)
 
-    plot_single_metric(
-        aggregate_mean_std(ingestion, ["format"], "avg_ingestion_latency_ms"),
+    plot_workload_metric(
+        aggregate_mean_std(ingestion, ["workload", "format"], "avg_ingestion_latency_ms"),
         output_dir,
-        "avg_ingestion_latency_ms",
-        "Average Ingestion Latency",
+        "Average Ingestion Latency by Workload",
         "Latency (ms)",
-        "ingestion_latency_avg",
+        "ingestion_latency_by_workload",
     )
-    plot_single_metric(
-        aggregate_mean_std(ingestion, ["format"], "write_throughput_rows_per_sec"),
+    plot_workload_metric(
+        aggregate_mean_std(ingestion, ["workload", "format"], "write_throughput_rows_per_sec"),
         output_dir,
-        "write_throughput_rows_per_sec",
-        "Write Throughput",
+        "Write Throughput by Workload",
         "Rows per second",
-        "write_throughput",
+        "write_throughput_by_workload",
     )
-    plot_single_metric(
-        aggregate_mean_std(ingestion, ["format"], "data_file_count"),
+    plot_workload_metric(
+        aggregate_mean_std(ingestion, ["workload", "format"], "row_count"),
         output_dir,
-        "data_file_count",
-        "Small File Generation",
+        "Captured Row Count by Workload",
+        "Rows captured",
+        "row_count_by_workload",
+    )
+    plot_workload_metric(
+        aggregate_mean_std(ingestion, ["workload", "format"], "row_capture_ratio"),
+        output_dir,
+        "Row Capture Ratio by Workload",
+        "Capture ratio (best format = 1.0)",
+        "row_capture_ratio_by_workload",
+    )
+    plot_workload_metric(
+        aggregate_mean_std(ingestion, ["workload", "format"], "data_file_count"),
+        output_dir,
+        "Small File Generation by Workload",
         "Number of data files",
-        "small_file_generation",
+        "small_file_generation_by_workload",
     )
-    plot_single_metric(
-        aggregate_mean_std(compaction, ["format"], "duration_seconds"),
+    plot_workload_metric(
+        aggregate_mean_std(compaction, ["workload", "format"], "duration_seconds"),
         output_dir,
-        "duration_seconds",
-        "Compaction Duration",
+        "Compaction Duration by Workload",
         "Duration (seconds)",
-        "compaction_duration",
+        "compaction_duration_by_workload",
     )
-    plot_query_comparison(query_before, query_after, output_dir)
+    plot_workload_metric(
+        aggregate_mean_std(query_before, ["workload", "format"], "query_latency_seconds"),
+        output_dir,
+        "Query Latency Before Compaction by Workload",
+        "Latency (seconds)",
+        "query_latency_before_by_workload",
+    )
+    plot_workload_metric(
+        aggregate_mean_std(query_after, ["workload", "format"], "query_latency_seconds"),
+        output_dir,
+        "Query Latency After Compaction by Workload",
+        "Latency (seconds)",
+        "query_latency_after_by_workload",
+    )
     plot_prediction_metric(
-        prediction_before,
+        prediction_before[prediction_before["workload"].isin(WORKLOAD_ORDER)],
         "accuracy",
         "Prediction Accuracy Before Compaction",
         "Accuracy",
@@ -327,7 +430,7 @@ def main():
         output_dir,
     )
     plot_prediction_metric(
-        prediction_after,
+        prediction_after[prediction_after["workload"].isin(WORKLOAD_ORDER)],
         "accuracy",
         "Prediction Accuracy After Compaction",
         "Accuracy",
@@ -335,11 +438,29 @@ def main():
         output_dir,
     )
     plot_prediction_metric(
-        prediction_after,
+        prediction_after[prediction_after["workload"].isin(WORKLOAD_ORDER)],
         "inference_time_seconds",
         "Prediction Inference Time After Compaction",
         "Inference time (seconds)",
         "prediction_inference_after_compaction",
+        output_dir,
+    )
+    plot_prediction_metric_by_workload(
+        prediction_after,
+        "accuracy",
+        "random_forest",
+        "Random Forest Accuracy After Compaction by Workload",
+        "Accuracy",
+        "random_forest_accuracy_after_by_workload",
+        output_dir,
+    )
+    plot_prediction_metric_by_workload(
+        prediction_after,
+        "inference_time_seconds",
+        "random_forest",
+        "Random Forest Inference Time After Compaction by Workload",
+        "Inference time (seconds)",
+        "random_forest_inference_after_by_workload",
         output_dir,
     )
 
