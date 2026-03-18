@@ -24,7 +24,9 @@ The goal is to help data engineers, platform teams, and students understand how 
 
 ## High-Level Flow
 
-![System architecture](papers/Model_Arch.drawio.png)
+<p align="center">
+    <img src="https://github.com/Imranian/Lakehouse_benchmark/blob/22ecae9954bbaf23ccb754185f314358a37e1101/img/Model_Arch.drawio.png">
+</p>
 
 The pipeline is orchestrated with **Airflow**, uses **Kafka** as the event backbone, and runs **format-specific Spark jobs** so each sink can be tuned independently.
 
@@ -32,19 +34,27 @@ The pipeline is orchestrated with **Airflow**, uses **Kafka** as the event backb
 
 ### Ingestion Overview
 
-![Ingestion overview](analysis/paper_figures/figure_ingestion_overview.png)
+<p align="center">
+    <img src="https://github.com/Imranian/Lakehouse_benchmark/blob/22ecae9954bbaf23ccb754185f314358a37e1101/img/figure_ingestion_overview.png">
+</p>
 
 ### Compaction and Query Overview
 
-![Compaction and query overview](analysis/paper_figures/figure_query_compaction_overview.png)
+<p align="center">
+    <img src="https://github.com/Imranian/Lakehouse_benchmark/blob/22ecae9954bbaf23ccb754185f314358a37e1101/img/figure_query_compaction_overview.png">
+</p>
 
 ### Query Trends Before vs After Compaction
 
-![Query run trends](analysis/paper_figures/figure_query_run_trends.png)
+<p align="center">
+    <img src="https://github.com/Imranian/Lakehouse_benchmark/blob/22ecae9954bbaf23ccb754185f314358a37e1101/img/figure_query_run_trends.png">
+</p>
 
 ### Predictive Benchmark Overview
 
-![Prediction overview](analysis/paper_figures/figure_prediction_overview.png)
+<p align="center">
+    <img src="https://github.com/Imranian/Lakehouse_benchmark/blob/22ecae9954bbaf23ccb754185f314358a37e1101/img/figure_prediction_overview.png">
+</p>
 
 ## Why It’s Useful
 
