@@ -3,6 +3,8 @@ data
 metrics/results
 analysis/paper_figures
 analysis/workload_figures
+papers/
+paper/
 .airflow
 __pycache__
 *.pyc

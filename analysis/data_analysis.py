@@ -18,6 +18,11 @@ FORMAT_ORDER = ["delta", "hudi", "iceberg"]
 WORKLOAD_ORDER = ["low", "medium", "burst"]
 MODEL_ORDER = ["logistic_regression", "random_forest"]
 HATCHES = {"delta": "//", "hudi": "\\\\", "iceberg": "xx"}
+COLORS = {
+    "delta": "#CC79A7",
+    "hudi": "#C46B2D",
+    "iceberg": "#0072B2",
+}
 
 
 def extract_workload(run_id):
@@ -131,6 +136,18 @@ def plot_single_metric(summary, output_dir, metric_col, title, ylabel, file_stem
 
 def plot_workload_metric(summary, output_dir, title, ylabel, file_stem):
     fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    plot_workload_metric_on_axis(ax, summary, title, ylabel, show_legend=True, use_hatch=True)
+    save_figure(fig, output_dir, file_stem)
+
+
+def plot_workload_metric_on_axis(
+    ax,
+    summary,
+    title,
+    ylabel,
+    show_legend=False,
+    use_hatch=True,
+):
     width = 0.22
     positions = list(range(len(WORKLOAD_ORDER)))
 
@@ -150,19 +167,36 @@ def plot_workload_metric(summary, output_dir, title, ylabel, file_stem):
             values,
             width=width,
             yerr=errors,
-            color="white",
+            color=COLORS[table_format],
             edgecolor="black",
             linewidth=1.0,
             capsize=4,
             label=table_format,
+            alpha=0.9,
         )
         for bar in bars:
-            bar.set_hatch(HATCHES[table_format])
+            bar.set_hatch(HATCHES[table_format] if use_hatch else "")
 
     ax.set_xticks(positions, WORKLOAD_ORDER)
-    ax.legend(frameon=False, fontsize=8)
+    if show_legend:
+        ax.legend(frameon=False, fontsize=8)
     style_axes(ax, title, ylabel)
-    save_figure(fig, output_dir, file_stem)
+
+
+def add_top_center_legend(fig):
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, facecolor=COLORS[fmt], edgecolor="black", linewidth=1.0)
+        for fmt in FORMAT_ORDER
+    ]
+    fig.legend(
+        handles,
+        FORMAT_ORDER,
+        loc="upper center",
+        ncol=3,
+        frameon=False,
+        bbox_to_anchor=(0.5, 1.02),
+        fontsize=9,
+    )
 
 
 def plot_query_comparison(query_before, query_after, output_dir):
@@ -268,6 +302,172 @@ def add_row_capture_ratio(ingestion):
     enriched = ingestion.copy()
     enriched["row_capture_ratio"] = enriched["row_count"] / run_max
     return enriched
+
+
+def build_query_improvement_summary(query_before, query_after):
+    before_summary = aggregate_mean_std(query_before, ["workload", "format"], "query_latency_seconds")
+    after_summary = aggregate_mean_std(query_after, ["workload", "format"], "query_latency_seconds")
+    merged = before_summary.merge(
+        after_summary,
+        on=["workload", "format"],
+        suffixes=("_before", "_after"),
+    )
+    merged["mean"] = merged["mean_before"] / merged["mean_after"]
+    merged["std"] = 0
+    return merged[["workload", "format", "mean", "std"]]
+
+
+def create_compact_paper_figures(
+    output_dir,
+    ingestion,
+    compaction,
+    query_before,
+    query_after,
+    prediction_after,
+):
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    ingestion_panels = [
+        (
+            aggregate_mean_std(ingestion, ["workload", "format"], "avg_ingestion_latency_ms"),
+            "Ingestion Latency",
+            "Latency (ms)",
+        ),
+        (
+            aggregate_mean_std(ingestion, ["workload", "format"], "write_throughput_rows_per_sec"),
+            "Write Throughput",
+            "Rows/s",
+        ),
+        (
+            aggregate_mean_std(ingestion, ["workload", "format"], "row_capture_ratio"),
+            "Row Capture Ratio",
+            "Ratio",
+        ),
+        (
+            aggregate_mean_std(ingestion, ["workload", "format"], "data_file_count"),
+            "Small File Count",
+            "Files",
+        ),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 6.8))
+    for index, (summary, title, ylabel) in enumerate(ingestion_panels):
+        ax = axes[index // 2][index % 2]
+        plot_workload_metric_on_axis(ax, summary, title, ylabel, use_hatch=False)
+        if title == "Row Capture Ratio":
+            ax.axhline(1.0, color="black", linestyle=":", linewidth=1.0)
+    add_top_center_legend(fig)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    save_figure(fig, output_dir, "figure_ingestion_overview")
+
+    query_panels = [
+        (
+            aggregate_mean_std(compaction, ["workload", "format"], "duration_seconds"),
+            "Compaction Duration",
+            "Seconds",
+        ),
+        (
+            aggregate_mean_std(query_before, ["workload", "format"], "query_latency_seconds"),
+            "Query Latency Before",
+            "Seconds",
+        ),
+        (
+            aggregate_mean_std(query_after, ["workload", "format"], "query_latency_seconds"),
+            "Query Latency After",
+            "Seconds",
+        ),
+        (
+            build_query_improvement_summary(query_before, query_after),
+            "Query Speedup After Compaction",
+            "Before / After",
+        ),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(10.5, 6.8))
+    for index, (summary, title, ylabel) in enumerate(query_panels):
+        ax = axes[index // 2][index % 2]
+        plot_workload_metric_on_axis(ax, summary, title, ylabel, use_hatch=False)
+    add_top_center_legend(fig)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    save_figure(fig, output_dir, "figure_query_compaction_overview")
+
+    rf_after = prediction_after[prediction_after["model"] == "random_forest"]
+    ml_panels = [
+        (
+            aggregate_mean_std(rf_after, ["workload", "format"], "accuracy"),
+            "Random Forest Accuracy",
+            "Accuracy",
+        ),
+        (
+            aggregate_mean_std(rf_after, ["workload", "format"], "inference_time_seconds"),
+            "Random Forest Inference Time",
+            "Seconds",
+        ),
+    ]
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 3.8))
+    for index, (summary, title, ylabel) in enumerate(ml_panels):
+        plot_workload_metric_on_axis(axes[index], summary, title, ylabel, use_hatch=False)
+    add_top_center_legend(fig)
+    fig.tight_layout(rect=(0, 0, 1, 0.88))
+    save_figure(fig, output_dir, "figure_prediction_overview")
+
+
+def create_query_run_trend_figure(output_dir, query_before, query_after):
+    if query_before.empty or query_after.empty:
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(10.8, 3.6), sharey=True)
+    phase_styles = {
+        "before": {"linestyle": "-", "marker": "o"},
+        "after": {"linestyle": "--", "marker": "s"},
+    }
+
+    for axis_index, workload in enumerate(WORKLOAD_ORDER):
+        ax = axes[axis_index]
+        before_subset = query_before[query_before["workload"] == workload]
+        after_subset = query_after[query_after["workload"] == workload]
+
+        for table_format in FORMAT_ORDER:
+            before_format = before_subset[before_subset["format"] == table_format].sort_values(
+                "run_number"
+            )
+            after_format = after_subset[after_subset["format"] == table_format].sort_values(
+                "run_number"
+            )
+            ax.plot(
+                before_format["run_number"],
+                before_format["query_latency_seconds"],
+                color=COLORS[table_format],
+                linewidth=1.8,
+                markersize=4,
+                label=f"{table_format} before" if axis_index == 0 else None,
+                **phase_styles["before"],
+            )
+            ax.plot(
+                after_format["run_number"],
+                after_format["query_latency_seconds"],
+                color=COLORS[table_format],
+                linewidth=1.8,
+                markersize=4,
+                alpha=0.85,
+                label=f"{table_format} after" if axis_index == 0 else None,
+                **phase_styles["after"],
+            )
+
+        ax.set_xticks([1, 2, 3])
+        ax.set_xlabel("Query run", fontsize=9)
+        style_axes(ax, workload.title(), "Latency (seconds)" if axis_index == 0 else "")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=3,
+        frameon=False,
+        bbox_to_anchor=(0.5, 1.08),
+        fontsize=8,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
+    save_figure(fig, output_dir, "figure_query_run_trends")
 
 
 def write_summary_tables(output_dir, ingestion, compaction, query_before, query_after, prediction_after):
@@ -471,6 +671,20 @@ def main():
         query_before,
         query_after,
         prediction_after,
+    )
+    create_compact_paper_figures(
+        output_dir,
+        ingestion,
+        compaction,
+        query_before,
+        query_after,
+        prediction_after,
+    )
+
+    create_query_run_trend_figure(
+        output_dir,
+        query_before,
+        query_after,
     )
 
     print(f"Saved paper-ready figures to {output_dir}")
