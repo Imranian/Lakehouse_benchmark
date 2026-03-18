@@ -181,6 +181,23 @@ or:
 ```json
 {"workload_profile": "burst"}
 ```
+#### 3.1 Airflow variables used
+```
+benchmark_workloads: {"low": {"mode": "constant", "event_rate": 100, "duration_seconds": 150, "sensors": 1000}, "medium": {"mode": "constant", "event_rate": 500, "duration_seconds": 250, "sensors": 1000}, "high": {"mode": "constant", "event_rate": 5000, "duration_seconds": 150, "sensors": 1000}, "burst": {"mode": "burst", "sensors": 1000, "phase_rates": [100, 2000, 100], "phase_durations": [45, 60, 45]}}
+```
+```
+smtp_from: from_mail
+	
+smtp_host: smtp.gmail.com
+
+smtp_password: Google App password
+
+smtp_port: 587
+	
+smtp_to: to_mail
+
+smtp_username: name 
+```
 
 ### 4. Review the Output
 
@@ -214,7 +231,7 @@ These are not absolute claims for every environment, but they are useful compara
 
 ## Rebuilding the Figures
 
-To regenerate the paper-style analysis figures:
+To regenerate the analysis figures:
 
 ```bash
 source venv/bin/activate
@@ -235,16 +252,8 @@ The project includes format-specific smoke tests in:
 
 These are useful for validating the basic Kafka → Spark → lakehouse write path before running the full DAG.
 
-## Research and Documentation
 
-If you want the more formal write-up:
-
-- Research draft: [paper/ieee_lakehouse_benchmark_draft.tex](paper/ieee_lakehouse_benchmark_draft.tex)
-- Literature and supporting material: [papers](papers)
-
-## Good Next Steps
-
-If you want to extend this repo further, good directions are:
+## Future Scope
 
 - run the benchmark on a distributed cluster instead of a local WSL environment
 - add more workload profiles or longer-duration experiments
@@ -253,5 +262,3 @@ If you want to extend this repo further, good directions are:
 - convert key results into a dashboard or notebook summary
 
 ---
-
-If you’re new to Spark, Kafka, Hudi, Delta, or Iceberg, this repo is meant to be both a benchmark and a learning project. The code is organized so you can inspect each stage separately, run the pipeline step by step, and understand how a modern lakehouse workflow behaves from ingestion all the way to downstream analytics.
